@@ -340,7 +340,44 @@ export const usePuterStore = create<PuterStore>((set, get) => {
                 messages: [
                     {
                         role: "user",
-                        content: message
+                        content: `
+                        ${message}
+
+                        IMPORTANT: Return STRICT JSON in this format:
+
+                        {
+                        "overallScore": number,
+                        "ATS": {
+                            "score": number,
+                            "tips": [
+                            {
+                                "type": "good" | "improve",
+                                "tip": "short title",
+                                "explanation": "detailed explanation and how to fix"
+                            }
+                            ]
+                        },
+                        "toneAndStyle": {
+                            "score": number,
+                            "tips": [
+                            {
+                                "type": "good" | "improve",
+                                "tip": "...",
+                                "explanation": "..."
+                            }
+                            ]
+                        },
+                        "content": { same structure },
+                        "structure": { same structure },
+                        "skills": { same structure }
+                        }
+
+                        RULES:
+                        - ALWAYS include "explanation"
+                        - DO NOT skip fields
+                        - DO NOT return plain text
+                        - ONLY return JSON
+                        `
                     }
                 ]
             })

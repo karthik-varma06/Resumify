@@ -1,58 +1,132 @@
-import { useParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
 import { useEffect, useState } from "react";
 import { usePuterStore } from "~/lib/puter";
+import Summary from "~/components/Summary";
+import ATS from "~/components/ATS";
+import Details from "~/components/Details";
+
+export const meta = () => [
+  { title: "Resumind | Review" },
+  { name: "description", content: "Detailed overview of your resume" },
+];
 
 const Resume = () => {
+  const { auth, isLoading, fs, kv } = usePuterStore();
   const { id } = useParams();
-  const { kv } = usePuterStore();
+  const navigate = useNavigate();
 
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const [imageUrl, setImageUrl] = useState("");
+  const [resumeUrl, setResumeUrl] = useState("");
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
 
   useEffect(() => {
-    const load = async () => {
-      try {
-        if (!id) return;
+    if (!isLoading && !auth.isAuthenticated) {
+      navigate(`/auth?next=/resume/${id}`);
+    }
+  }, [isLoading, auth.isAuthenticated, id, navigate]);
 
-        const res = await kv.get(`resume:${id}`);
+  useEffect(() => {
+    let resumeUrlTemp = "";
+    let imageUrlTemp = "";
 
-        if (!res) {
-          console.log("❌ No data found in KV");
-          return;
-        }
+    const loadResume = async () => {
+      if (!id) return;
 
-        const parsed = JSON.parse(res);
+      const resume = await kv.get(`resume:${id}`);
+      if (!resume) return;
 
-        // EXACT SAME STYLE AS YT (console output)
-        console.log("RESUME DATA:", parsed);
+      const data = JSON.parse(resume);
 
-        setData(parsed);
-      } catch (err) {
-        console.error("LOAD ERROR:", err);
-      } finally {
-        setLoading(false);
+      const resumeBlob = await fs.read(data.resumePath);
+      if (!resumeBlob) {
+        console.error("Resume blob missing");
+        return;
       }
+
+      const pdfBlob = new Blob([resumeBlob], { type: "application/pdf" });
+      resumeUrlTemp = URL.createObjectURL(pdfBlob); // ✅ FIX
+      setResumeUrl(resumeUrlTemp);
+
+      const imageBlob = await fs.read(data.imagePath);
+      if (!imageBlob) {
+        console.error("Image blob missing");
+        return;
+      }
+
+      imageUrlTemp = URL.createObjectURL(imageBlob); // ✅ FIX
+      setImageUrl(imageUrlTemp);
+
+      const safeFeedback = {
+        overallScore: data.feedback?.overallScore || 0,
+        ATS: data.feedback?.ATS || { score: 0, tips: [] },
+        toneAndStyle: data.feedback?.toneAndStyle || { score: 0, tips: [] },
+        content: data.feedback?.content || { score: 0, tips: [] },
+        structure: data.feedback?.structure || { score: 0, tips: [] },
+        skills: data.feedback?.skills || { score: 0, tips: [] },
+      };
+
+      setFeedback(safeFeedback);
+
+      console.log({
+        resumeUrl: resumeUrlTemp,
+        imageUrl: imageUrlTemp,
+        feedback: safeFeedback,
+      });
     };
 
-    load();
-  }, [id]);
+    loadResume();
 
-  // loading state
-  if (loading) return <h1>Loading...</h1>;
-
-  // safety fallback
-  if (!data) return <h1>No data found</h1>;
+    return () => {
+      if (resumeUrlTemp) URL.revokeObjectURL(resumeUrlTemp);
+      if (imageUrlTemp) URL.revokeObjectURL(imageUrlTemp);
+    };
+  }, [id, fs, kv]);
 
   return (
-    <div style={{ padding: 20 }}>
-      <h1>Resume Result</h1>
+    <main className="!pt-0">
+      <nav className="resume-nav">
+        <Link to="/" className="back-button">
+          <img src="/icons/back.svg" alt="logo" className="w-2.5 h-2.5" />
+          <span className="text-gray-800 text-sm font-semibold">
+            Back to Homepage
+          </span>
+        </Link>
+      </nav>
 
-      <h2>Company: {data.companyName}</h2>
-      <h2>Job: {data.jobTitle}</h2>
+      <div className="flex flex-row w-full max-lg:flex-col-reverse">
+        <section className="feedback-section bg-[url('/images/bg-small.svg')] bg-cover h-[100vh] sticky top-0 items-center justify-center">
+          {imageUrl && resumeUrl && (
+            <div className="animate-in fade-in duration-1000 gradient-border max-sm:m-0 h-[90%] max-wxl:h-fit w-fit">
+              <a href={resumeUrl} target="_blank" rel="noopener noreferrer">
+                <img
+                  src={imageUrl}
+                  className="w-full h-full object-contain rounded-2xl"
+                  title="resume"
+                  alt="resume preview"
+                />
+              </a>
+            </div>
+          )}
+        </section>
 
-      <h3>Feedback:</h3>
-      <pre>{JSON.stringify(data.feedback, null, 2)}</pre>
-    </div>
+        <section className="feedback-section">
+          <h2 className="text-4xl !text-black font-bold">Resume Review</h2>
+
+          {feedback ? (
+            <div className="flex flex-col gap-8 animate-in fade-in duration-1000">
+              <Summary feedback={feedback} />
+              <ATS
+                score={feedback?.ATS?.score || 0}
+                suggestions={feedback?.ATS?.tips || []}
+              />
+              <Details feedback={feedback} />
+            </div>
+          ) : (
+            <img src="/images/resume-scan-2.gif" className="w-full" />
+          )}
+        </section>
+      </div>
+    </main>
   );
 };
 
