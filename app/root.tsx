@@ -10,6 +10,7 @@ import { useEffect } from "react";
 import type { Route } from "./+types/root";
 import "./app.css";
 import { usePuterStore } from "~/lib/puter";
+import { useThemeStore } from "~/lib/theme";
 
 export const links: Route.LinksFunction = () => [
   { rel: "preconnect", href: "https://fonts.googleapis.com" },
@@ -20,19 +21,28 @@ export const links: Route.LinksFunction = () => [
   },
   {
     rel: "stylesheet",
-    href: "https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap",
+    href: "https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Outfit:wght@100..900&display=swap",
   },
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const { init } = usePuterStore();
+  const { theme } = useThemeStore();
 
   useEffect(() => {
-    init();  
+    init();
   }, []);
+
+  // Apply theme class on mount and changes
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", theme === "dark");
+  }, [theme]);
+
   return (
-    <html lang="en">
+    <html lang="en" className={theme === "dark" ? "dark" : ""}>
       <head>
+        <meta charSet="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
         <Links />
       </head>
@@ -67,11 +77,11 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   }
 
   return (
-    <main className="pt-16 p-4 container mx-auto">
+    <main style={{ padding: "2rem", maxWidth: 600, margin: "0 auto" }}>
       <h1>{message}</h1>
-      <p>{details}</p>
+      <p style={{ color: "var(--text-secondary)" }}>{details}</p>
       {stack && (
-        <pre className="w-full p-4 overflow-x-auto">
+        <pre style={{ overflow: "auto", padding: "1rem", fontSize: "0.8rem" }}>
           <code>{stack}</code>
         </pre>
       )}

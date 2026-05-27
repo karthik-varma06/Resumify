@@ -3,9 +3,11 @@ import Navbar from "~/components/Navbar";
 import FileUploader from "~/components/FileUploader";
 import { useNavigate } from "react-router";
 import { convertPdfToImage } from "~/lib/pdf2img";
+import { extractResumeText } from "~/lib/extractText";
 import { generateUUID } from "~/lib/utils";
 import { prepareInstructions } from "../../constants";
 import { usePuterStore } from "~/lib/puter";
+import { motion } from "framer-motion";
 
 const Upload = () => {
     const { auth, fs, kv, ai } = usePuterStore();
@@ -52,8 +54,6 @@ const Upload = () => {
             setStatusText('Uploading file...');
             const uploadedFile = await fs.upload([file]);
 
-            console.log("UPLOAD:", uploadedFile);
-
             if (!uploadedFile || !uploadedFile.path) {
                 setStatusText('Error: Upload failed');
                 return;
@@ -62,7 +62,6 @@ const Upload = () => {
             // ✅ CONVERT PDF → IMAGE
             setStatusText('Converting PDF...');
             const imageFile = await convertPdfToImage(file);
-            console.log("PDF RESULT:", imageFile);
 
             if (!imageFile.file) {
                 setStatusText('Error: PDF conversion failed');
@@ -73,10 +72,21 @@ const Upload = () => {
             setStatusText('Uploading image...');
             const uploadedImage = await fs.upload([imageFile.file]);
 
-            console.log("IMAGE UPLOAD:", uploadedImage);
-
             if (!uploadedImage || !uploadedImage.path) {
                 setStatusText('Error: Image upload failed');
+                return;
+            }
+
+            // ✅ TEXT EXTRACTION (PDF direct text + OCR fallback)
+            setStatusText('Extracting text from resume...');
+            const resumeText = await extractResumeText(
+                file,
+                imageFile.file,
+                async (img: File) => ai.img2txt(img)
+            );
+
+            if (!resumeText || resumeText.trim().length < 20) {
+                setStatusText('Error: Could not extract text from resume. Please ensure the PDF is not corrupted.');
                 return;
             }
 
@@ -96,50 +106,51 @@ const Upload = () => {
             await kv.set(`resume:${uuid}`, JSON.stringify(data));
 
             // ✅ AI CALL
-            setStatusText('Analyzing...');
+            setStatusText('Analyzing resume with AI...');
 
             const prompt = prepareInstructions({
                 jobTitle,
-                jobDescription
+                jobDescription,
+                resumeText,
             });
 
             const feedback = await ai.feedback(uploadedFile.path, prompt);
-            console.log("🔥 RAW FEEDBACK:", feedback);
             if (!feedback) {
-                setStatusText('Error: AI failed');
+                setStatusText('Error: AI analysis failed. Please try again.');
                 return;
             }
 
-            let feedbackText;
+            // Extract the text content from the response (unified format)
+            let feedbackText: string | undefined;
 
-            if ((feedback as any)?.choices) {
-                // OpenRouter style
+            if ((feedback as any)?.choices?.[0]?.message?.content) {
                 feedbackText = (feedback as any).choices[0].message.content;
-            } else if ((feedback as any)?.message) {
-                // Puter style
-                feedbackText = typeof feedback.message.content === "string"
-                    ? feedback.message.content
-                    : feedback.message.content[0].text;
+            } else if ((feedback as any)?.message?.content) {
+                const content = (feedback as any).message.content;
+                feedbackText = typeof content === "string"
+                    ? content
+                    : Array.isArray(content)
+                        ? content.map((c: any) => c.text || "").join("")
+                        : JSON.stringify(content);
             }
-            console.log("🧠 EXTRACTED TEXT:", feedbackText);
 
             let parsedFeedback;
 
             if (!feedbackText) {
-                console.log("❌ EMPTY RESPONSE (likely 429)");
                 parsedFeedback = { error: "No AI response" };
             } else {
                 try {
-                    let clean = feedbackText;
-
+                    let clean = feedbackText.trim();
                     if (clean.startsWith("```")) {
-                        clean = clean.replace(/```json/g, "").replace(/```/g, "").trim();
+                        clean = clean.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
                     }
-
+                    const jsonMatch = clean.match(/\{[\s\S]*\}/);
+                    if (jsonMatch) {
+                        clean = jsonMatch[0];
+                    }
                     parsedFeedback = JSON.parse(clean);
 
                 } catch (err) {
-                    console.log("❌ PARSE FAILED:", feedbackText);
                     parsedFeedback = { raw: feedbackText };
                 }
             }
@@ -149,7 +160,6 @@ const Upload = () => {
             await kv.set(`resume:${uuid}`, JSON.stringify(data));
 
             setStatusText('Analysis complete, redirecting...');
-            console.log("FINAL DATA:", data);
 
             setTimeout(() => {
                 navigate(`/resume/${uuid}`);
@@ -157,13 +167,12 @@ const Upload = () => {
 
         } catch (err) {
             console.error(err);
-            setStatusText("Something broke");
+            setStatusText("Something went wrong. Please try again.");
         } 
     };
     
     const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
-        console.log("FORM SUBMITTED");
         const formData = new FormData(e.currentTarget);
 
         const companyName = formData.get('company-name') as string;
@@ -171,7 +180,6 @@ const Upload = () => {
         const jobDescription = formData.get('job-description') as string;
 
         if (!file) {
-            console.log("NO FILE SELECTED");
             return;
         }       
 
@@ -179,60 +187,87 @@ const Upload = () => {
     };
 
     return (
-        <main className="bg-[url('/images/bg-main.svg')] bg-cover">
+        <motion.main 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="min-h-screen bg-page transition-colors duration-300"
+        >
             <Navbar />
 
-            <section className="main-section">
-                <div className="page-heading py-16">
-                    <h1>Smart feedback for your dream job</h1>
+            <section className="relative z-10 px-4 pb-20 mt-12">
+                <motion.div 
+                    initial={{ y: 20, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    className="max-w-2xl mx-auto w-full flex flex-col items-center"
+                >
+                    <div className="text-center mb-10">
+                        <h1 className="text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-purple-500 mb-4">
+                            Smart feedback for your dream job
+                        </h1>
 
-                    {isProcessing ? (
-                        <>
-                            <h2>{statusText}</h2>
-                            <img src="/images/resume-scan.gif" className="w-full" />
-                        </>
-                    ) : (
-                        <h2>Drop your resume for an ATS score and improvement tips</h2>
-                    )}
+                        {isProcessing ? (
+                            <motion.div 
+                                initial={{ opacity: 0, scale: 0.9 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                className="flex flex-col items-center gap-6 mt-8"
+                            >
+                                <h2 className="text-xl text-secondary font-medium animate-pulse">{statusText}</h2>
+                                <div className="relative p-2 rounded-3xl bg-card border border-border shadow-lg">
+                                    <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/20 to-purple-500/20 blur-xl rounded-full" />
+                                    <img src="/images/resume-scan.gif" className="w-64 h-64 object-cover rounded-2xl relative z-10" alt="Scanning..." />
+                                </div>
+                            </motion.div>
+                        ) : (
+                            <p className="text-lg text-secondary">
+                                Drop your resume for an ATS score and improvement tips
+                            </p>
+                        )}
+                    </div>
 
                     {!isProcessing && (
-                        <form
+                        <motion.form
+                            initial={{ y: 20, opacity: 0 }}
+                            animate={{ y: 0, opacity: 1 }}
+                            transition={{ delay: 0.2 }}
                             id="upload-form"
                             onSubmit={handleSubmit}
-                            className="flex flex-col gap-4 mt-8"
+                            className="w-full bg-card border border-border p-8 rounded-3xl shadow-lg flex flex-col gap-6"
                         >
-
-                            <div className="form-div">
-                                <label htmlFor="company-name">Company Name</label>
-                                <input type="text" name="company-name" id="company-name" />
+                            <div className="space-y-2">
+                                <label htmlFor="company-name" className="text-sm font-semibold text-primary">Company Name (Optional)</label>
+                                <input type="text" name="company-name" id="company-name" placeholder="e.g. Google" className="w-full px-4 py-3 rounded-xl bg-input border border-border text-primary focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all outline-none" />
                             </div>
 
-                            <div className="form-div">
-                                <label htmlFor="job-title">Job Title</label>
-                                <input type="text" name="job-title" id="job-title" />
+                            <div className="space-y-2">
+                                <label htmlFor="job-title" className="text-sm font-semibold text-primary">Job Title</label>
+                                <input type="text" name="job-title" id="job-title" placeholder="e.g. Frontend Engineer" required className="w-full px-4 py-3 rounded-xl bg-input border border-border text-primary focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all outline-none" />
                             </div>
 
-                            <div className="form-div">
-                                <label htmlFor="job-description">Job Description</label>
-                                <textarea rows={5} name="job-description" id="job-description" />
+                            <div className="space-y-2">
+                                <label htmlFor="job-description" className="text-sm font-semibold text-primary">Job Description</label>
+                                <textarea rows={4} name="job-description" id="job-description" placeholder="Paste the job description here..." className="w-full px-4 py-3 rounded-xl bg-input border border-border text-primary focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all outline-none resize-y" />
                             </div>
 
-                            <div className="form-div">
-                                <label>Upload Resume</label>
+                            <div className="space-y-2 pt-2">
+                                <label className="text-sm font-semibold text-primary">Upload Resume (PDF)</label>
                                 <FileUploader onFileSelect={handleFileSelect} />
                             </div>
 
-                            <button className="primary-button" type="submit">
+                            <motion.button 
+                                whileHover={{ scale: 1.02 }}
+                                whileTap={{ scale: 0.98 }}
+                                className="w-full py-4 mt-4 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-500 text-white font-bold text-lg shadow-lg hover:shadow-indigo-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed" 
+                                type="submit"
+                                disabled={!file}
+                            >
                                 Analyze Resume
-                            </button>
-                        </form>
+                            </motion.button>
+                        </motion.form>
                     )}
-                </div>
+                </motion.div>
             </section>
-        </main>
+        </motion.main>
     );
 };
-
-
 
 export default Upload;

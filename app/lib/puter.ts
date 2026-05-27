@@ -329,18 +329,21 @@ export const usePuterStore = create<PuterStore>((set, get) => {
     };
 
     const feedback = async (message: string) => {
-        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-            method: "POST",
-            headers: {
-                "Authorization": `Bearer ${import.meta.env.VITE_OPENROUTER_API_KEY}`,
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                model: "google/gemma-3-27b-it:free",
-                messages: [
-                    {
-                        role: "user",
-                        content: `
+        // Strategy: Try OpenRouter first, fall back to Puter AI chat
+        try {
+            console.log("🤖 Calling OpenRouter API...");
+            const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${import.meta.env.VITE_OPENROUTER_API_KEY}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    model: "openrouter/free",
+                    messages: [
+                        {
+                            role: "user",
+                            content: `
                         ${message}
 
                         IMPORTANT: Return STRICT JSON in this format:
@@ -378,14 +381,97 @@ export const usePuterStore = create<PuterStore>((set, get) => {
                         - DO NOT return plain text
                         - ONLY return JSON
                         `
-                    }
-                ]
-            })
-        });
+                        }
+                    ]
+                })
+            });
 
-    const data = await res.json();
-    return data;
-};
+            if (!res.ok) {
+                const errorText = await res.text();
+                console.warn(`⚠️ OpenRouter returned ${res.status}: ${errorText}`);
+                throw new Error(`OpenRouter HTTP ${res.status}`);
+            }
+
+            const data = await res.json();
+
+            // Validate that we got a proper response with content
+            const content = data?.choices?.[0]?.message?.content;
+            if (!content || content.trim().length === 0) {
+                console.warn("⚠️ OpenRouter returned empty content");
+                throw new Error("Empty OpenRouter response");
+            }
+
+            console.log("✅ OpenRouter call succeeded");
+            return data;
+        } catch (openRouterErr) {
+            console.warn("❌ OpenRouter failed, falling back to Puter AI chat...", openRouterErr);
+
+            // Fallback: Use Puter's built-in AI chat (free, no API key needed)
+            const puter = getPuter();
+            if (!puter) {
+                console.error("❌ Puter.js not available for fallback");
+                return undefined;
+            }
+
+            try {
+                const puterResponse = await puter.ai.chat(
+                    `${message}
+
+                    IMPORTANT: Return STRICT JSON in this format:
+
+                    {
+                    "overallScore": number,
+                    "ATS": {
+                        "score": number,
+                        "tips": [
+                        {
+                            "type": "good" | "improve",
+                            "tip": "short title",
+                            "explanation": "detailed explanation and how to fix"
+                        }
+                        ]
+                    },
+                    "toneAndStyle": {
+                        "score": number,
+                        "tips": [
+                        {
+                            "type": "good" | "improve",
+                            "tip": "...",
+                            "explanation": "..."
+                        }
+                        ]
+                    },
+                    "content": { same structure },
+                    "structure": { same structure },
+                    "skills": { same structure }
+                    }
+
+                    RULES:
+                    - ALWAYS include "explanation"
+                    - DO NOT skip fields
+                    - DO NOT return plain text
+                    - ONLY return JSON`
+                ) as AIResponse;
+
+                console.log("✅ Puter AI fallback succeeded");
+                // Wrap in OpenRouter-compatible format so upload.tsx can parse it uniformly
+                return {
+                    choices: [{
+                        message: {
+                            content: typeof puterResponse?.message?.content === "string"
+                                ? puterResponse.message.content
+                                : Array.isArray(puterResponse?.message?.content)
+                                    ? puterResponse.message.content.map((c: any) => c.text || "").join("")
+                                    : JSON.stringify(puterResponse)
+                        }
+                    }]
+                };
+            } catch (puterErr) {
+                console.error("❌ Puter AI fallback also failed:", puterErr);
+                return undefined;
+            }
+        }
+    };
 
     const img2txt = async (image: string | File | Blob, testMode?: boolean) => {
         const puter = getPuter();
